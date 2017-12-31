@@ -287,9 +287,19 @@ where
         // SECURITY: Implemented wasted space checking.
         let len: u32 = VarUint32::deserialize(rdr)?.into();
         let mut map = IndexMap::with_capacity(len as usize);
+        let mut prev_idx = None;
         for _ in 0..len {
-            // TODO: Require elements to be in order.
             let idx: u32 = VarUint32::deserialize(rdr)?.into();
+            match prev_idx {
+                Some(prev) if prev >= idx => {
+                    // Supposedly these names must be "sorted by index", so
+                    // let's try enforcing that and seeing what happens.
+                    return Err(Error::Other("indices are out of order"));
+                }
+                _ => {
+                    prev_idx = Some(idx);
+                },
+            }
             let val = T::deserialize(rdr)?;
             map.insert(idx, val);
         }
@@ -499,5 +509,29 @@ mod tests {
             .expect("deserialize failed");
 
         assert_eq!(deserialized, map);
+    }
+
+    #[test]
+    fn deserialize_requires_elements_to_be_in_order() {
+        // Build a in-order example by hand.
+        let mut valid = vec![];
+        VarUint32::from(2u32).serialize(&mut valid).unwrap();
+        VarUint32::from(0u32).serialize(&mut valid).unwrap();
+        "val 0".to_string().serialize(&mut valid).unwrap();
+        VarUint32::from(1u32).serialize(&mut valid).unwrap();
+        "val 1".to_string().serialize(&mut valid).unwrap();
+        let map = IndexMap::<String>::deserialize(&mut io::Cursor::new(valid))
+            .expect("unexpected error deserializing");
+        assert_eq!(map.len(), 2);
+
+        // Build an out-of-order example by hand.
+        let mut invalid = vec![];
+        VarUint32::from(2u32).serialize(&mut invalid).unwrap();
+        VarUint32::from(1u32).serialize(&mut invalid).unwrap();
+        "val 1".to_string().serialize(&mut invalid).unwrap();
+        VarUint32::from(0u32).serialize(&mut invalid).unwrap();
+        "val 0".to_string().serialize(&mut invalid).unwrap();
+        let res = IndexMap::<String>::deserialize(&mut io::Cursor::new(invalid));
+        assert!(res.is_err());
     }
 }
